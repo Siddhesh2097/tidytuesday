@@ -1,0 +1,11 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+
+# renv installed packages — reconstructable from renv.lock
+renv/library/
+
+# Rendered R Markdown output
+*.html
+*_files/

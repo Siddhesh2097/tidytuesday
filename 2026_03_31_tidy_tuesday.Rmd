@@ -1,0 +1,424 @@
+---
+title: "TidyTuesday 2026 Week 14 — Ocean Temperature (Birchy Head, Nova Scotia)"
+author: ""
+date: "2026-03-31"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## Overview
+
+This analysis uses the [TidyTuesday 2026 Week 14](https://github.com/rfordatascience/tidytuesday) dataset, which contains ocean temperature readings from a fixed monitoring station at
+**Birchy Head, Nova Scotia**. Sensors are deployed at multiple depths (2 m to 40 m at
+low tide), recording sub-daily temperature measurements from February 2018 to late 2025.
+
+Two datasets are used:
+
+- `ocean_temperature`: Daily mean/SD temperature by depth
+- `ocean_temperature_deployments`: Metadata on each sensor deployment period
+
+---
+
+## 1. Load Packages
+
+```{r packages}
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(readr)
+library(tidyr)
+```
+
+---
+
+## 2. Load Data from Tidytuesday 31st March 2026
+```{r}
+tuesdata <- tidytuesdayR::tt_load('2026-03-31')
+
+ocean_temperature <- tuesdata$ocean_temperature
+ocean_temperature_deployments <- tuesdata$ocean_temperature_deployments
+```
+
+## 3. Explore the Data
+
+```{r preview-deployments}
+# Sensor deployment metadata: 14 deployments
+ocean_temperature_deployments
+```
+
+```{r distinct-dates}
+# Number of unique observation dates
+ocean_temperature |> dplyr::distinct(date)
+```
+
+---
+
+## How are temperatures changing over time?
+
+```{r}
+ocean_temperature |>
+  mutate(year = year(date)) |>
+  summarise(
+    annual_mean = mean(mean_temperature_degree_c, na.rm = TRUE),
+    annual_sd   = sd(mean_temperature_degree_c,   na.rm = TRUE),
+    .by = year
+  ) 
+```
+
+## Is the change seasonal ? (month x year heatmap)
+```{r}
+ocean_temperature |>
+  mutate(year  = as.factor(year(date)),
+         month = as.factor(month(date, label = TRUE))
+         ) |>
+  summarise(
+    mean_temp = mean(mean_temperature_degree_c, na.rm = TRUE),
+    .by = c(year, month)
+  ) |>
+  ggplot(aes(x = year, y = month, fill = mean_temp)) +
+  geom_tile() +
+  scale_fill_viridis_c(option = "plasma") +
+  labs(title = "Monthly Mean Temperature by Year",
+       fill  = "°C", x = "Year", y = "Month")
+```
+
+## 4. Seasonal Temperature Cycles by Depth
+
+Monthly mean temperature grouped by sensor depth, showing the seasonal warming and
+cooling pattern across all depth levels.
+
+```{r seasonal-by-depth}
+ocean_temperature |>
+  mutate(month = as.factor(month(date, label = TRUE))) |>
+  summarise(
+    mean_temp = mean(mean_temperature_degree_c),
+    .by = c(month, sensor_depth_at_low_tide_m)
+  ) |>
+  ggplot(aes(
+    x     = month,
+    y     = mean_temp,
+    color = factor(sensor_depth_at_low_tide_m),
+    group = sensor_depth_at_low_tide_m
+  )) +
+  geom_line() +
+  labs(
+    title = "Monthly Mean Temperature by Depth",
+    color = "Depth (m)",
+    y     = "Mean Temp (°C)",
+    x     = NULL
+  )
+```
+
+1. As expected, at the lower depths mean temp is at the higher levels and it goes down as depth increases
+2. During the same months when high temps are expected, at lower depths mean temp is high
+
+---
+
+## 5. Year-over-Year Warming Trend
+
+Annual mean temperature per depth level — useful for detecting long-term warming or
+cooling signals at different depths.
+
+```{r annual-trend}
+ocean_temperature |>
+  mutate(year = year(date)) |>
+  summarise(
+    annual_mean = mean(mean_temperature_degree_c),
+    .by = c(year, sensor_depth_at_low_tide_m)
+  ) |>
+  ggplot(aes(
+    x     = year,
+    y     = annual_mean,
+    color = factor(sensor_depth_at_low_tide_m)
+  )) +
+  geom_line() +
+  geom_point() +
+  labs(
+    title = "Annual Mean Temperature by Depth",
+    color = "Depth (m)",
+    y     = "Mean Temp (°C)",
+    x     = NULL
+  )
+```
+
+```{r}
+
+ocean_temperature |>
+  mutate(month = month(date), year = year(date)) |>
+  mutate(
+    baseline = mean(mean_temperature_degree_c, na.rm = TRUE),
+    .by = c(sensor_depth_at_low_tide_m, month)
+  ) |>
+  mutate(anomaly = mean_temperature_degree_c - baseline) |>
+  summarise(
+    mean_anomaly = mean(anomaly, na.rm = TRUE),
+    .by = c(year, sensor_depth_at_low_tide_m)
+  ) |>
+  mutate(depth_label = paste0(sensor_depth_at_low_tide_m, " m")) |>
+  ggplot(aes(x = factor(year), y = reorder(depth_label, -sensor_depth_at_low_tide_m), fill = mean_anomaly)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  scale_fill_gradient2(
+    low      = "#2166ac",
+    mid      = "white",
+    high     = "#d6604d",
+    midpoint = 0,
+    name     = "Anomaly (°C)"
+  ) +
+  labs(
+    title    = "Annual Temperature Anomaly by Depth",
+    subtitle = "Deviation from each depth's long-term monthly mean",
+    x        = "Year",
+    y        = "Sensor Depth"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(panel.grid = element_blank())
+
+```
+---
+
+Here's what the heatmap reveals:
+
+Key Patterns
+Coherent warm/cool years across all depths
+2021–2023 are consistently red (warmer than baseline) and 2019 is consistently blue (cooler) — this signal runs through all depths simultaneously, suggesting large-scale oceanographic or climate forcing rather than surface heating alone.
+
+40 m stands out in 2022
+The deepest sensor has its strongest warm anomaly in 2022, darker red than the shallower depths that year. This confirms the earlier statistical finding — the 40 m layer has its own variability that doesn't always track the surface.
+
+2024 — cooling at depth, near-neutral at surface
+The bottom layers (20–40 m) flip strongly negative in 2024 while the surface (2–5 m) stays near zero. This is a clear depth-dependent signal — whatever drove the 2024 cooling affected deep water more than the surface.
+
+2018 is missing data at some depths
+The blank cells at shallow depths in 2018 reflect incomplete deployment coverage early in the record — worth keeping in mind when interpreting that year.
+
+## 6. Thermal Stratification (Surface vs. Deep)
+
+Difference between 2 m and 40 m daily temperatures. Positive values indicate a warmer
+surface layer — a sign of thermal stratification, typically strongest in summer.
+
+```{r stratification}
+ocean_temperature |>
+  filter(sensor_depth_at_low_tide_m %in% c(2, 40)) |>
+  summarise(
+    mean_temp = mean(mean_temperature_degree_c),
+    .by = c(date, sensor_depth_at_low_tide_m)
+  ) |>
+  pivot_wider(
+    names_from   = sensor_depth_at_low_tide_m,
+    values_from  = mean_temp,
+    names_prefix = "depth_"
+  ) |>
+  mutate(stratification = depth_2 - depth_40) |>
+  ggplot(aes(x = date, y = stratification)) +
+  geom_line(alpha = 0.5) +
+  geom_smooth() +
+  labs(
+    title = "Thermal Stratification (2 m − 40 m)",
+    y     = "Temp Difference (°C)",
+    x     = NULL
+  )
+```
+
+---
+
+## Q2 : How does temperature change with depth
+
+```{r}
+ocean_temperature |>
+  summarise(
+    mean_temp = mean(mean_temperature_degree_c, na.rm = TRUE),
+    median_temp = median(mean_temperature_degree_c, na.rm = TRUE),
+    sd_temp = sd(mean_temperature_degree_c, na.rm = TRUE),
+    min_temp = min(mean_temperature_degree_c, na.rm = TRUE),
+    max_temp = max(mean_temperature_degree_c, na.rm = TRUE),
+    .by = sensor_depth_at_low_tide_m
+  ) |>
+  arrange(sensor_depth_at_low_tide_m)
+
+```
+
+```{r}
+ocean_temperature |>
+  mutate(season = case_when(
+    month(date) %in% c(12, 1, 2) ~ "Winter",
+    month(date) %in% c(3, 4, 5)  ~ "Spring",
+    month(date) %in% c(6, 7, 8)  ~ "Summer",
+    month(date) %in% c(9, 10, 11) ~ "Fall"
+  )) |>
+  summarise(
+    mean_temp = mean(mean_temperature_degree_c, na.rm = TRUE),
+    .by = c(season, sensor_depth_at_low_tide_m)
+  ) |>
+  mutate(season = factor(season, levels = c("Winter", "Spring", "Summer", "Fall"))) |>
+  # ggplot(aes(x = mean_temp, y = factor(sensor_depth_at_low_tide_m))) +
+  ggplot(aes(x = mean_temp, y = factor(sensor_depth_at_low_tide_m, levels = c(40, 30, 20, 15, 10, 5, 2 )))) +
+  geom_line(aes(group = season), orientation = "y") +
+  geom_point(aes(color = season), size = 3) +
+  scale_color_manual(values = c("Winter" = "#2166ac", "Spring" = "#74add1",
+                                 "Summer" = "#d6604d", "Fall"   = "#f4a582")) +
+  labs(title   = "Temperature Profile by Depth & Season",
+       x       = "Mean Temp (°C)",
+       y       = "Depth (m)",
+       color   = NULL) +
+  theme_minimal(base_size = 13)
+
+```
+
+Three clear takeaways:
+
+Summer & Fall: Strong gradient — surface is much warmer than the bottom (~6–7°C difference). The thermocline is well-established
+Winter & Spring: Nearly vertical lines — all depths converge around 3–4°C, meaning the water column is fully mixed with almost no gradient
+Fall is the most stratified season — surface retains summer heat while deep water has already cooled, creating the steepest gradient of all four seasons
+
+
+## 7. Deployment Duration Analysis
+
+Bar chart of how long each sensor deployment lasted, ordered by start date.
+
+```{r deployment-duration}
+ocean_temperature_deployments |>
+  mutate(duration_days = as.numeric(end_date - start_date)) |>
+  ggplot(aes(x = start_date, y = duration_days)) +
+  geom_col() +
+  labs(
+    title = "Sensor Deployment Durations",
+    x     = "Start Date",
+    y     = "Days"
+  )
+```
+
+---
+
+## 8. High-Variability Days (Anomaly Hunting)
+
+Days where within-day temperature SD is in the top 1% — potential anomalies, mixing
+events, or sensor issues worth investigating.
+
+```{r anomaly-days}
+ocean_temperature |>
+  filter(sd_temperature_degree_c >
+    quantile(sd_temperature_degree_c, 0.99, na.rm = TRUE)) |>
+  arrange(desc(sd_temperature_degree_c))
+```
+
+## 9. Missing Data Investigation
+
+The TidyTuesday readme warns to be wary of days with no data. We investigate
+whether gaps are random or systematic.
+
+### 9a. Build the full expected grid and find missing combinations
+
+```{r missing-grid}
+# Every date × depth combination we expect to see
+full_grid <- tidyr::expand_grid(
+  date                       = seq(min(ocean_temperature$date),
+                                   max(ocean_temperature$date), by = "day"),
+  sensor_depth_at_low_tide_m = c(2, 5, 10, 15, 20, 30, 40)
+)
+
+# Rows present in full_grid but absent from ocean_temperature
+missing <- full_grid |>
+  dplyr::anti_join(ocean_temperature,
+                   by = c("date", "sensor_depth_at_low_tide_m")) |>
+  dplyr::mutate(year = lubridate::year(date))
+```
+
+### 9b. Summary — missing depth-days per year
+
+```{r missing-summary}
+missing |>
+  dplyr::summarise(
+    missing_depth_days = n(),
+    missing_dates      = n_distinct(date),
+    .by = year
+  ) |>
+  dplyr::arrange(year)
+```
+
+### 9c. Which depths are affected?
+
+```{r missing-by-depth}
+# Pivot wider to see which depth columns have gaps per year
+missing |>
+  dplyr::summarise(
+    missing_days = n(),
+    .by = c(year, sensor_depth_at_low_tide_m)
+  ) |>
+  tidyr::pivot_wider(
+    names_from   = sensor_depth_at_low_tide_m,
+    values_from  = missing_days,
+    values_fill  = 0,
+    names_prefix = "d"
+  ) |>
+  dplyr::arrange(year)
+```
+
+Only depths 2 m, 5 m, and 40 m have gaps — the other four depths have complete
+records. This rules out full station outages; individual sensors are the problem.
+
+### 9d. Heatmap — missing data by depth and month
+
+```{r missing-heatmap}
+full_grid |>
+  dplyr::left_join(
+    ocean_temperature |>
+      dplyr::select(date, sensor_depth_at_low_tide_m) |>
+      dplyr::mutate(has_data = TRUE),
+    by = c("date", "sensor_depth_at_low_tide_m")
+  ) |>
+  dplyr::mutate(
+    has_data = tidyr::replace_na(has_data, FALSE),
+    month    = lubridate::floor_date(date, "month")
+  ) |>
+  dplyr::summarise(
+    pct_missing = mean(!has_data) * 100,
+    .by = c(month, sensor_depth_at_low_tide_m)
+  ) |>
+  ggplot(aes(x = month,
+             y = factor(sensor_depth_at_low_tide_m),
+             fill = pct_missing)) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "#c0392b",
+                      name = "% days\nmissing") +
+  labs(title = "Missing Data by Depth & Month",
+       x     = NULL,
+       y     = "Depth (m)") +
+  theme_minimal()
+```
+
+### 9e. Cross-check gaps against deployment periods
+
+```{r missing-deployments}
+# Join each gap to the deployment it falls within
+missing |>
+  summarise(
+    gap_start = min(date),
+    gap_end   = max(date),
+    days      = n(),
+    .by = c(year, sensor_depth_at_low_tide_m)
+  ) |>
+  arrange(year, sensor_depth_at_low_tide_m) |>
+  left_join(
+    ocean_temperature_deployments |>
+      select(deployment_id, start_date, end_date),
+    by = join_by(between(gap_start, start_date, end_date))
+  )
+```
+
+Every single gap maps exactly to a named deployment period — confirming these
+are **not sensor failures but missing sensors during active deployments**.
+
+Key findings:
+
+- **depl_02 (2019)** — 2 m sensor not re-deployed after retrieval (146 days)
+- **depl_09 (2022–2023)** — 40 m sensor absent for the entire deployment (192 days total)
+- **depl_10 (2023)** — 5 m sensor missing throughout (131 days)
+- **depl_12 (2024)** — worst deployment: 2 m, 5 m, and 40 m all affected simultaneously
+- **depl_14 (2025)** — 5 m drops out at the very end of the record (9 days)
+
+The **2024 cooling anomaly at depth** seen in the annual anomaly heatmap
+(Section 5) coincides with the depl_12 gaps — that signal should be interpreted
+with caution.
