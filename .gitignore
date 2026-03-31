@@ -7,5 +7,4 @@
 renv/library/
 
 # Rendered R Markdown output
-*.html
 *_files/
