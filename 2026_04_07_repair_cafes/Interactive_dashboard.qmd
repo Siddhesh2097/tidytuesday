@@ -1,0 +1,193 @@
+---
+title: "Exploring Repair cafes"
+subtitle: "From tidytuesday data"
+author: "Siddhesh Pujari"
+format: dashboard
+server: shiny
+---
+
+```{r}
+#| context: setup
+
+# load libraries
+library(tidyverse)
+library(conflicted)
+library(admiral)
+library(polyglotr)
+library(countrycode)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(plotly)
+library(arrow)
+library(shiny)
+
+# conflicts
+conflicts_prefer(dplyr::filter)
+
+# Load required data
+data_path <- here::here("2026_04_07_repair_cafes/data/")
+repairs <- read_parquet(paste0(data_path, "repairs.parquet"))
+electric_non_electric <- read_parquet(paste0(data_path, "electric_non_electric.parquet"))
+world_cafes <- readRDS(paste0(data_path, "world_cafes.rds"))
+
+repairs_by_month <- repairs |> 
+  mutate(repair_month = floor_date(repair_date, "month")) |> 
+  count(repair_month, name = "no_of_repairs")
+```
+
+
+## {.sidebar}
+
+
+```{r}
+selectInput("select_country" ,"Select country", c("All countries", unique(repairs$country_name)), selected = "All countries")
+selectInput("select_cafe" ,"Select repair cafe", c("All repair cafes", unique(repairs$repair_cafe_name)), selected = "All repair cafes")
+# selectInput("select_year" ,"Select year", c("All years", unique(repairs$repair_year)), selected = "All years")
+```
+
+## Column
+
+```{r Plot number of repairs}
+plotlyOutput("plot_no_of_repairs")
+```
+
+```{r Plot most presented products}
+plotlyOutput("plot_most_presented_products")
+```
+
+```{r Sort by brands}
+tagList(
+    selectInput(
+        "sort_brands",
+        label    = NULL,
+        choices  = c("Sort by number", "Sort by success rate"),
+        selected = "Sort by number"
+    ),
+    br(),
+    plotlyOutput("plot_most_presented_brands")
+)
+```
+
+```{r server - prep}
+#| context: server
+
+# Filtering logic
+repairs_filtered <- reactive({
+    repairs |>
+        filter(
+            if (input$select_country == "All countries") TRUE else country_name == input$select_country,
+            if (input$select_cafe == "All repair cafes") TRUE else repair_cafe_name == input$select_cafe
+        )
+})
+
+observe({
+    updateSelectInput(
+        session,
+        inputId  = "select_cafe",
+        choices  = c("All repair cafes", unique(repairs |> 
+                        filter(if (input$select_country == "All countries") TRUE 
+                               else country_name == input$select_country) |>
+                        pull(repair_cafe_name))),
+        selected = "All repair cafes"
+    )
+})
+```
+
+```{r Plot-no of repairs}
+#| context: server
+
+# Plot — number of repairs over time
+output$plot_no_of_repairs <- renderPlotly({
+    p <- repairs_filtered() |>
+        mutate(repair_month = floor_date(repair_date, "month")) |> 
+        count(repair_month, name = "no_of_repairs") |> 
+        ggplot(aes(x = repair_month, y = no_of_repairs)) +
+        geom_area(fill = "#e8734a", alpha = 0.3) +
+        geom_line(color = "#e8734a", linewidth = 0.8) +
+        scale_x_date(date_breaks = "1 year", date_labels = "%Y") +
+        labs(
+            title = paste("Number of repairs in", input$select_country),
+            x = "Year", y = "Number of repairs"
+        ) +
+        theme_classic()
+
+    ggplotly(p) |> 
+        style(hoverinfo = "none", traces = 1) |> 
+        plotly::layout(hovermode = "x unified")
+})
+```
+
+```{r server- most products presented}
+#| context: server
+
+# Plot — most presented products
+most_products_pres <- reactive({
+    repairs_filtered() |> 
+        count(kind_of_product, name = "no_products_presented") |> 
+        arrange(desc(no_products_presented)) |> 
+        head(10) |> 
+        mutate(kind_of_product = fct_reorder(kind_of_product, no_products_presented)) 
+})
+
+output$plot_most_presented_products <- renderPlotly({
+    p <- most_products_pres() |> 
+        ggplot(aes(x = kind_of_product, y = no_products_presented, fill = kind_of_product)) +
+        geom_bar(stat = "identity") +
+        guides(fill = "none") +
+        coord_flip() +
+        labs(title = "Most presented products", x = "", y = "") +
+        theme_bw() +
+        theme(
+            axis.ticks         = element_blank(),
+            panel.background   = element_rect(fill = "white", color = NA),
+            plot.background    = element_rect(fill = "white", color = NA),
+            panel.border       = element_blank(),
+            panel.grid.major.y = element_blank()
+        )
+    ggplotly(p)
+})
+```
+
+```{r server-most presented brands}
+#| context: server
+
+# Plot — most presented brands
+most_brands <- reactive({
+    df <- repairs_filtered() |> 
+        filter(!brand %in% c("Unknown/n.a.", "unknown/n.a.", NA)) |> 
+        group_by(brand) |> 
+        summarise(
+            no_products_presented = n(),
+            success_rate          = sum(repaired == "yes") / n(),
+            .groups               = "drop"
+        )
+
+    if (input$sort_brands == "Sort by number") {
+        df |> arrange(desc(no_products_presented)) |> head(10) |>
+            mutate(brand = fct_reorder(brand, no_products_presented))
+    } else {
+        df |> arrange(desc(success_rate)) |> head(10) |>
+            mutate(brand = fct_reorder(brand, success_rate))
+    }
+})
+
+output$plot_most_presented_brands <- renderPlotly({
+    y_var   <- if (input$sort_brands == "Sort by number") "no_products_presented" else "success_rate"
+    y_label <- if (input$sort_brands == "Sort by number") "Number of products" else "Success rate"
+
+    p <- most_brands() |> 
+        ggplot(aes(x = brand, y = .data[[y_var]])) +
+        geom_bar(stat = "identity", fill = "#e75480") +
+        coord_flip() +
+        labs(title = "Most presented brands", x = "", y = y_label) +
+        theme_bw() +
+        theme(
+            axis.ticks         = element_blank(),
+            panel.background   = element_rect(fill = "white", color = NA),
+            plot.background    = element_rect(fill = "white", color = NA),
+            panel.border       = element_blank(),
+            panel.grid.major.y = element_blank()
+        )
+    ggplotly(p, tooltip = "none")
+})
+```

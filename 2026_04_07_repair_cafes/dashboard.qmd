@@ -1,0 +1,129 @@
+---
+title: "Exploring Repair cafes"
+subtitle: "From tidytuesday data"
+format: dashboard
+---
+
+```{r load libraries}
+# load libraries
+library(tidyverse)
+library(conflicted)
+library(admiral)
+library(polyglotr)
+library(countrycode)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(plotly)
+library(arrow)
+
+# conflicts
+conflicts_prefer(dplyr::filter)
+```
+
+```{r load all data}
+data_path <- here::here("2026_04_07_repair_cafes/data/")
+repairs <- read_parquet(paste0(data_path, "repairs.parquet"))
+electric_non_electric <- read_parquet(paste0(data_path, "electric_non_electric.parquet"))
+world_cafes <- readRDS(paste0(data_path, "world_cafes.rds"))
+```
+
+## Row {height=50%}
+
+```{r Map of all cafes}
+#| title: Map of all cafes
+ggplot(world_cafes) +
+  geom_sf(aes(fill = num_cafes), color = "white", linewidth = 0.2) +
+  scale_fill_viridis_c(
+    option = "plasma",
+    na.value = "grey85", # countries with no cafes appear grey
+    name = "Number of Cafes"
+  ) +
+  labs(
+    title = "Cafe Locations Around the World",
+    subtitle = "By country"
+  ) +
+  theme_void() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 12),
+    plot.subtitle = element_text(hjust = 0.5, size = 8),
+    legend.position = "bottom"
+  )
+```
+
+## Row {height=50%}
+
+```{r}
+plot_rep_st_category <- function(data, title) {
+  p <- ggplot(
+    data,
+    aes(x = factor(repair_year), y = repaired_status, fill = repaired)
+  ) +
+    geom_col(position = "dodge") + # side-by-side bars, not stacked
+    scale_fill_manual(
+      values = c("yes" = "#2ecc71", "half" = "#f39c12", "no" = "#e74c3c"),
+      name = "Repair Status"
+    ) +
+    facet_wrap(~category, ncol = 2) +
+    labs(
+      title = title,
+      x = "Year",
+      y = "Number of Products"
+    ) +
+    theme_minimal() +
+    theme(
+      strip.text = element_text(face = "bold", size = 8),
+      axis.text.x = element_text(angle = 90, hjust = 1, size = 6),
+      legend.position = "bottom",
+      panel.spacing = unit(0.8, "lines")
+    )
+
+  return(p)
+}
+```
+
+### Column {.tabset}
+
+```{r household bar}
+#| title: "Chart 1"
+plot_rep_st_household <- plot_rep_st_category(
+  data = electric_non_electric |> filter(grepl("Household", category)),
+  title = "Status for household appliances by electric/non over years"
+)
+
+plot_rep_st_household
+```
+
+```{r tool bar}
+#| title: "Chart 2"
+plot_rep_st_tools <- plot_rep_st_category(
+  data = electric_non_electric |> filter(grepl("Tools", category)),
+  title = "Status for tools by electric/non over years"
+)
+
+plot_rep_st_tools
+```
+
+```{r toy bar}
+#| title: "Chart 3"
+plot_rep_st_toys <- plot_rep_st_category(
+  data = electric_non_electric |> filter(grepl("Toys", category)),
+  title = "Status for toys by electric/non over years"
+)
+
+plot_rep_st_toys
+```
+
+### Column
+
+```{r num of cafes growth over the years}
+#| title: Num of cafes growth
+
+repairs |>
+  group_by(repair_year) |>
+  summarise(N_cafes = n_distinct(repair_cafe_name)) |>
+  # mutate(repair_year = as.factor(repair_year)) |>
+  ggplot(
+    mapping = aes(x = repair_year, y = N_cafes)
+  ) +
+  geom_bar(stat = "identity")
+```

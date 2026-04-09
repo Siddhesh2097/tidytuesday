@@ -1,0 +1,314 @@
+---
+title: "Exploring Repair cafes"
+subtitle: "From tidytuesday data"
+format: html
+---
+
+# Loading libraries and data
+```{r loading lib and data}
+#| code-fold: true
+#| output: false
+tuesdata <- tidytuesdayR::tt_load('2026-04-07')
+
+# load libraries
+library(tidyverse)
+library(conflicted)
+library(admiral)
+library(polyglotr)
+library(countrycode)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(plotly)
+library(arrow) # for saving as parquet data
+library(ggplot2)
+
+# conflicts
+conflicts_prefer(dplyr::filter)
+
+repairs <- as_tibble(tuesdata$repairs) |> convert_blanks_to_na()
+repairs_text <- as_tibble(tuesdata$repairs_text) |> convert_blanks_to_na()
+```
+
+# Prepare repairs data for further analysis
+```{r prep repairs}
+repairs <- repairs |>
+  mutate(
+    repair_year = as.factor(year(repair_date)),
+    repair_month = floor_date(repair_date, "month"),
+    repaired = if_else(repaired == "ja", "yes", repaired),
+    # Get country , continent , country flags with countrycode package
+    country_name = countrycode(
+      country,
+      origin = "iso2c",
+      destination = "country.name"
+    ),
+    country_flag = countrycode(
+      country,
+      origin = "iso2c",
+      destination = "unicode.symbol"
+    ),
+    continent = countrycode(
+      country,
+      origin = "iso2c",
+      destination = "continent"
+    )
+  ) |>
+  select(repair_id, repair_date, repair_year, everything())
+```
+
+# Prepare repairs text data
+
+```{r prep repairs text}
+# Update N/A to NA values to be analysed correctly
+repairs_text <- repairs_text |>
+  mutate(model = if_else(model == "N/A", NA_character_, model))
+```
+
+# No of cafes growth per year
+
+```{r}
+#| eval: false
+#No of cafes growth each year ------------------------------------------------------
+repairs |>
+  group_by(repair_year) |>
+  summarise(N_cafes = n_distinct(repair_cafe_name)) |>
+  # mutate(repair_year = as.factor(repair_year)) |>
+  ggplot(
+    mapping = aes(x = repair_year, y = N_cafes)
+  ) +
+  geom_bar(stat = "identity")
+```
+
+# Map of all cafes -----
+```{r }
+#| echo: false
+#| eval: false
+
+# Create a map to mark where all the cafes are located
+# --- Step 1: Count cafes per country from your data ---
+cafe_counts <- repairs |>
+  group_by(country_name) |>
+  summarise(num_cafes = n_distinct(repair_cafe_name), .groups = "drop") |>
+  arrange(desc(num_cafes))
+
+cafe_counts <- cafe_counts |>
+  mutate(
+    country_name = case_when(
+      country_name == "United States" ~ "United States of America",
+      country_name == "French Guiana" ~ "French Guiana", # part of France in rnaturalearth, may stay unmatched
+      country_name == "Hong Kong SAR China" ~ "Hong Kong",
+      TRUE ~ country_name
+    )
+  )
+
+# --- Step 2: Get world map polygons ---
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+# --- Step 3: Join your cafe counts to the map data ---
+world_cafes <- world |>
+  left_join(cafe_counts, by = c("name" = "country_name"))
+
+# --- Step 4: Plot ---
+ggplot(world_cafes) +
+  geom_sf(aes(fill = num_cafes), color = "white", linewidth = 0.2) +
+  scale_fill_viridis_c(
+    option = "plasma",
+    na.value = "grey85", # countries with no cafes appear grey
+    name = "Number of Cafes"
+  ) +
+  labs(
+    title = "Cafe Locations Around the World",
+    subtitle = "By country"
+  ) +
+  theme_void() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 12),
+    plot.subtitle = element_text(hjust = 0.5, size = 8),
+    legend.position = "bottom"
+  )
+```
+
+# Exploring categories and their repair status over the years
+
+```{r}
+#| echo: false
+repaired_count_long <- repairs |>
+  # drop any rows with missing category
+  filter_out(is.na(category) | is.na(repaired)) |>
+  group_by(repair_year, category, repaired) |>
+  summarise(repaired_status = n(), .groups = "drop") |>
+  mutate(repaired = factor(repaired, levels = c("yes", "half", "no")))
+
+repaired_count_wide <- repaired_count_long |>
+  pivot_wider(
+    id_cols = c(repair_year, category),
+    names_from = repaired,
+    values_from = repaired_status
+  )
+
+electric_non_electric <- repaired_count_long |>
+  filter(grepl("electric", category))
+```
+
+Many categories make it difficult to visualise all at once
+For now, only visualize categories that are either electric and non electric
+
+```{r}
+#| echo: false
+#| eval: false
+plot_rep_st_category <- function(data, title) {
+  p <- ggplot(
+    data,
+    aes(x = factor(repair_year), y = repaired_status, fill = repaired)
+  ) +
+    geom_col(position = "dodge") + # side-by-side bars, not stacked
+    scale_fill_manual(
+      values = c("yes" = "#2ecc71", "half" = "#f39c12", "no" = "#e74c3c"),
+      name = "Repair Status"
+    ) +
+    facet_wrap(~category, ncol = 2) +
+    labs(
+      title = title,
+      x = "Year",
+      y = "Number of Products"
+    ) +
+    theme_minimal() +
+    theme(
+      strip.text = element_text(face = "bold", size = 8),
+      axis.text.x = element_text(angle = 90, hjust = 1, size = 6),
+      legend.position = "bottom",
+      panel.spacing = unit(0.8, "lines")
+    )
+
+  return(p)
+}
+```
+
+Let's look at each category 
+```{r}
+#| echo: false
+#| eval: false
+plot_rep_st_household <- plot_rep_st_category(
+  data = electric_non_electric |> filter(grepl("Household", category)),
+  title = "Status for household appliances by electric/non over years"
+)
+
+plot_rep_st_household
+```
+
+```{r}
+#| echo: false
+#| eval: false
+plot_rep_st_tools <- plot_rep_st_category(
+  data = electric_non_electric |> filter(grepl("Tools", category)),
+  title = "Status for tools by electric/non over years"
+)
+
+plot_rep_st_tools
+```
+
+```{r}
+#| echo: false
+#| eval: false
+
+plot_rep_st_toys <- plot_rep_st_category(
+  data = electric_non_electric |> filter(grepl("Toys", category)),
+  title = "Status for toys by electric/non over years"
+)
+
+plot_rep_st_toys
+```
+
+# save all datasets
+```{r}
+#| include: false
+#| eval: false
+
+# Save all datasets as parquet
+data_path <- here::here("2026_04_07_repair_cafes/data/")
+
+write_parquet(repairs, paste0(data_path, "repairs.parquet"))
+write_parquet(repairs_text, paste0(data_path, "repairs_text.parquet"))
+# write_parquet(world_cafes, paste0(data_path, "world_cafes.parquet"))
+saveRDS(world_cafes, paste0(data_path, "world_cafes.rds"))
+write_parquet(electric_non_electric, paste0(data_path, "electric_non_electric.parquet"))
+
+```
+
+# Interactive shiny code
+
+## Number of repairs
+```{r}
+# by country, repair cafe and year
+
+repairs_by_month <- repairs |> 
+  filter(country_name == "Germany") |> 
+  mutate(repair_month = floor_date(repair_date, "month")) |> 
+  count(repair_month, name = "no_of_repairs")
+
+# Plot
+p <- repairs_by_month |> 
+  ggplot(aes(x = repair_month, y = no_of_repairs)) +
+  geom_area(fill = "#e8734a", alpha = 0.3) +               # filled area
+  geom_line(color = "#e8734a", linewidth = 0.8) +
+  scale_x_date(date_breaks = "1 year", date_labels = "%Y") +
+  labs(
+    title = "Number of repairs in Germany",
+    x = "Year",
+    y = "Number of repairs"
+  ) +
+  theme_classic()
+
+ggplotly(p) |> 
+  style(hoverinfo = "none", traces = 1) |> 
+  plotly::layout(
+    hovermode = "x unified"
+  )
+```
+
+## Most presented products in Germany
+
+```{r}
+most_products_pres <- repairs |> 
+  filter(country_name == "Germany") |> 
+  count(kind_of_product, name = "no_products_presented") |> 
+  arrange(desc(no_products_presented)) |> 
+  head(10) |> 
+  mutate(kind_of_product = fct_reorder(kind_of_product, no_products_presented)) 
+
+p <- most_products_pres |> 
+  ggplot(aes(x = kind_of_product, y = no_products_presented, fill = kind_of_product)) +
+  geom_bar(stat = "identity") +
+  guides(fill = "none") +
+  coord_flip() +
+  theme_bw() +
+  labs(
+    title = "Most presented products in Germany",
+    x = "",
+    y = ""
+  ) +
+  theme(
+    axis.ticks = element_blank(),
+    panel.background  = element_rect(fill = "white", color = NA),
+    plot.background   = element_rect(fill = "white", color = NA),
+    panel.border      = element_blank(),    # removes the bw border box
+    panel.grid.major.y = element_blank()    # optional: removes horizontal grid lines too
+)
+
+ggplotly(p)
+
+
+```
+
+```{r}
+repairs |> 
+group_by(brand) |> 
+        summarise(
+            no_products_presented = n(),
+            success_rate = sum(repaired == "yes") / n(),   # swap formula here
+            .groups = "drop"
+        ) |> 
+          arrange(desc(no_products_presented)) |> 
+            head(10) |> 
+            mutate(brand = fct_reorder(brand, no_products_presented))
+```
